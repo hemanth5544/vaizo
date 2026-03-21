@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { Send } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Button } from "@/components/ui/button"
@@ -11,30 +11,77 @@ export default function Home() {
   const [state, setState] = useState<VoiceButtonState>("idle")
   const [hasRecording, setHasRecording] = useState(false)
   const [theme, setTheme] = useState<"light" | "dark" | "system">("system")
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
 
-  const handlePress = () => {
+  const handlePress = async () => {
     if (state === "idle") {
-      setState("recording")
-      setHasRecording(false)
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        streamRef.current = stream
+        const mediaRecorder = new MediaRecorder(stream)
+        mediaRecorderRef.current = mediaRecorder
+
+        const chunks: Blob[] = []
+        mediaRecorder.ondataavailable = (event) => {
+          chunks.push(event.data)
+        }
+
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(chunks, { type: 'audio/webm' })
+          setAudioBlob(blob)
+          setState("processing")
+          setTimeout(() => {
+            setState("success")
+            setHasRecording(true)
+          }, 2000)
+        }
+
+        mediaRecorder.start()
+        setState("recording")
+      } catch (error) {
+        console.error('Error accessing microphone:', error)
+        setState("error")
+      }
     } else if (state === "recording") {
-      setState("processing")
-      setTimeout(() => {
-        setState("success")
-        setHasRecording(true)
-      }, 2000)
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.stop()
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop())
+        }
+      }
     }
   }
 
-  const handleSend = () => {
-    console.log("Sending recorded data...")
-    setHasRecording(false)
-    setState("idle")
+  const handleSend = async () => {
+    if (!audioBlob) return
+
+    const formData = new FormData()
+    formData.append('audio', audioBlob, 'voice-note.webm')
+
+    try {
+      const response = await fetch('/api/send-voice', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (response.ok) {
+        console.log('Voice note sent successfully')
+        setHasRecording(false)
+        setState("idle")
+        setAudioBlob(null)
+      } else {
+        console.error('Failed to send voice note')
+      }
+    } catch (error) {
+      console.error('Error sending voice note:', error)
+    }
   }
 
   return (
     <main className="flex min-h-screen items-center justify-center relative">
 
-      {/* ✅ Theme Switcher Top Right */}
       <div className="absolute top-5 right-5">
         <ThemeSwitcher
           defaultValue="system"
@@ -45,7 +92,6 @@ export default function Home() {
 
       <div className="flex items-center gap-3">
 
-        {/* 🎤 Animated Voice Button */}
         <motion.div
           animate={{
             scale: state === "recording" ? 1.1 : 1,
@@ -61,7 +107,6 @@ export default function Home() {
           />
         </motion.div>
 
-        {/* ✉️ Animated Send Button */}
         <AnimatePresence>
           {hasRecording && (
             <motion.div
